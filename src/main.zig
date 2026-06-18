@@ -21,35 +21,31 @@ extern fn emscripten_set_main_loop_arg(
 const screenWidth: i32 = 800;
 const screenHeight: i32 = 600;
 const title = "Zig Invaders";
+const maxBullets: i32 = 10;
 
 var game_state: GameState = undefined;
 
 const GameState = struct {
     player: Player,
+    bullets: Bullets,
     timer: Timer,
 
     fn init() GameState {
-        const playerWidth: f32 = 50;
-        const playerHeight: f32 = 30;
-
         return .{
-            .player = Player.init(
-                @as(f32, @floatFromInt(screenWidth)) / 2 - playerWidth / 2,
-                @as(f32, @floatFromInt(screenHeight)) - 60,
-                playerWidth,
-                playerHeight,
-            ),
-
+            .player = Player.init(),
+            .bullets = Bullets.init(),
             .timer = Timer.init(),
         };
     }
 
     fn update(self: *@This()) void {
         self.player.update();
+        self.bullets.update(self.player);
     }
 
     fn draw(self: *@This()) void {
         self.player.draw();
+        self.bullets.draw();
         self.timer.draw();
         rl.drawText(title, 300, 250, 40, rl.Color.green);
     }
@@ -76,12 +72,17 @@ const Player = struct {
     height: f32,
     speed: f32,
 
-    fn init(x: f32, y: f32, w: f32, h: f32) @This() {
+    fn init() @This() {
+        const playerWidth: f32 = 50;
+        const playerHeight: f32 = 30;
+        const x = @as(f32, @floatFromInt(screenWidth)) / 2 - playerWidth / 2;
+        const y = @as(f32, @floatFromInt(screenHeight)) - 60;
+
         return .{
             .position_x = x,
             .position_y = y,
-            .width = w,
-            .height = h,
+            .width = playerWidth,
+            .height = playerHeight,
             .speed = 5.0,
         };
     }
@@ -103,6 +104,98 @@ const Player = struct {
             @intFromFloat(self.height),
             rl.Color.blue,
         );
+    }
+};
+
+const Bullets = struct {
+    bullets: [maxBullets]Bullet,
+
+    fn init() @This() {
+        var bullets: [maxBullets]Bullet = undefined;
+        const bulletWidth: f32 = 4.0;
+        const bulletHeight: f32 = 10.0;
+
+        for (&bullets) |*bullet| {
+            bullet.* = Bullet.init(0, 0, bulletWidth, bulletHeight);
+        }
+
+        return .{ .bullets = bullets };
+    }
+
+    fn update(self: *@This(), player: Player) void {
+        if (rl.isKeyPressed(.space)) {
+            for (&self.bullets) |*bullet| {
+                if (bullet.spawn(player)) {
+                    break;
+                }
+            }
+        }
+
+        for (&self.bullets) |*bullet| {
+            bullet.update();
+        }
+    }
+
+    fn draw(self: *@This()) void {
+        for (&self.bullets) |*bullet| {
+            bullet.draw();
+        }
+    }
+};
+
+const Bullet = struct {
+    position_x: f32,
+    position_y: f32,
+    width: f32,
+    height: f32,
+    speed: f32,
+    active: bool,
+
+    pub fn init(
+        position_x: f32,
+        position_y: f32,
+        width: f32,
+        height: f32,
+    ) @This() {
+        return .{
+            .position_x = position_x,
+            .position_y = position_y,
+            .width = width,
+            .height = height,
+            .speed = 10.0,
+            .active = false,
+        };
+    }
+
+    fn spawn(self: *@This(), player: Player) bool {
+        if (!self.active) {
+            self.position_x = player.position_x + player.width / 2 - self.width / 2;
+            self.position_y = player.position_y;
+            self.active = true;
+            return true;
+        }
+        return false;
+    }
+
+    fn update(self: *@This()) void {
+        if (self.active) {
+            self.position_y -= self.speed;
+            if (self.position_y < 0) {
+                self.active = false;
+            }
+        }
+    }
+
+    fn draw(self: @This()) void {
+        if (self.active) {
+            rl.drawRectangle(
+                @intFromFloat(self.position_x),
+                @intFromFloat(self.position_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                rl.Color.red,
+            );
+        }
     }
 };
 
