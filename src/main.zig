@@ -23,17 +23,22 @@ const screenHeight: i32 = 600;
 const title = "Zig Invaders";
 const maxBullets: i32 = 10;
 
+const invaderRows: i32 = 5;
+const invaderCols: i32 = 11;
+
 var game_state: GameState = undefined;
 
 const GameState = struct {
     player: Player,
     bullets: Bullets,
+    invaders: Invaders,
     timer: Timer,
 
     fn init() GameState {
         return .{
             .player = Player.init(),
             .bullets = Bullets.init(),
+            .invaders = Invaders.init(),
             .timer = Timer.init(),
         };
     }
@@ -46,6 +51,7 @@ const GameState = struct {
     fn draw(self: *@This()) void {
         self.player.draw();
         self.bullets.draw();
+        self.invaders.draw();
         self.timer.draw();
         rl.drawText(title, 300, 250, 40, rl.Color.green);
     }
@@ -194,6 +200,72 @@ const Bullet = struct {
                 @intFromFloat(self.width),
                 @intFromFloat(self.height),
                 rl.Color.red,
+            );
+        }
+    }
+};
+
+const Invaders = struct {
+    invaders: [invaderRows][invaderCols]Invader,
+
+    fn init() @This() {
+        var invaders: [invaderRows][invaderCols]Invader = undefined;
+
+        const invaderStartX: f32 = 100.0;
+        const invaderStartY: f32 = 50.0;
+        const invaderSpacingX = 60.0;
+        const invaderSpacingY = 40.0;
+
+        for (&invaders, 0..) |*row, i| {
+            for (row, 0..) |*invader, j| {
+                const x: f32 = invaderStartX + @as(f32, @floatFromInt(j)) * invaderSpacingX;
+                const y: f32 = invaderStartY + @as(f32, @floatFromInt(i)) * invaderSpacingY;
+                invader.* = Invader.init(x, y);
+            }
+        }
+
+        return .{ .invaders = invaders };
+    }
+
+    fn draw(self: *@This()) void {
+        for (&self.invaders) |*row| {
+            for (row) |*invader| {
+                invader.draw();
+            }
+        }
+    }
+};
+
+const Invader = struct {
+    position_x: f32,
+    position_y: f32,
+    width: f32,
+    height: f32,
+    speed: f32,
+    active: bool,
+
+    fn init(position_x: f32, position_y: f32) @This() {
+        const invaderWidth = 40.0;
+        const invaderHeight = 30.0;
+
+        return .{
+            .position_x = position_x,
+            .position_y = position_y,
+            .width = invaderWidth,
+            .height = invaderHeight,
+            .speed = 5.0,
+            .active = true,
+        };
+    }
+
+    fn draw(self: @This()) void {
+        if (self.active) {
+            rl.drawRectangle(
+                @intFromFloat(self.position_x),
+                @intFromFloat(self.position_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                rl.Color.green,
             );
         }
     }
