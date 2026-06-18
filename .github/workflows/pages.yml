@@ -29,6 +29,9 @@ jobs:
       - name: build wasm
         run: make build-web
 
+      - name: prepare index.html
+        run: cp zig-out/web/zig_invaders.html zig-out/web/index.html
+
       - name: upload pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
