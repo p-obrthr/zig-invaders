@@ -20,7 +20,9 @@ extern fn emscripten_set_main_loop_arg(
 
 const screenWidth: i32 = 800;
 const screenHeight: i32 = 600;
+
 const title = "Zig Invaders";
+
 const maxBullets: i32 = 10;
 
 const invaderRows: i32 = 5;
@@ -46,6 +48,7 @@ const GameState = struct {
     fn update(self: *@This()) void {
         self.player.update();
         self.bullets.update(self.player);
+        self.invaders.update();
     }
 
     fn draw(self: *@This()) void {
@@ -53,7 +56,6 @@ const GameState = struct {
         self.bullets.draw();
         self.invaders.draw();
         self.timer.draw();
-        rl.drawText(title, 300, 250, 40, rl.Color.green);
     }
 };
 
@@ -207,24 +209,80 @@ const Bullet = struct {
 
 const Invaders = struct {
     invaders: [invaderRows][invaderCols]Invader,
+    speed: f32,
+    moveDelay: i32,
+    direction: f32,
+    moveTimer: i32,
+    dropDistance: f32,
 
     fn init() @This() {
         var invaders: [invaderRows][invaderCols]Invader = undefined;
 
-        const invaderStartX: f32 = 100.0;
-        const invaderStartY: f32 = 50.0;
-        const invaderSpacingX = 60.0;
-        const invaderSpacingY = 40.0;
+        const startX: f32 = 100.0;
+        const startY: f32 = 50.0;
+        const spacingX = 60.0;
+        const spacingY = 40.0;
+        const speed = 5.0;
+        const moveDelay = 30;
+        const direction = 1.0;
+        const moveTimer = 0;
+        const dropDistance = 20.0;
 
         for (&invaders, 0..) |*row, i| {
             for (row, 0..) |*invader, j| {
-                const x: f32 = invaderStartX + @as(f32, @floatFromInt(j)) * invaderSpacingX;
-                const y: f32 = invaderStartY + @as(f32, @floatFromInt(i)) * invaderSpacingY;
+                const x: f32 = startX + @as(f32, @floatFromInt(j)) * spacingX;
+                const y: f32 = startY + @as(f32, @floatFromInt(i)) * spacingY;
                 invader.* = Invader.init(x, y);
             }
         }
 
-        return .{ .invaders = invaders };
+        return .{
+            .invaders = invaders,
+            .speed = speed,
+            .moveDelay = moveDelay,
+            .direction = direction,
+            .moveTimer = moveTimer,
+            .dropDistance = dropDistance,
+        };
+    }
+
+    fn update(self: *@This()) void {
+        self.moveTimer += 1;
+        if (self.moveTimer >= self.moveDelay) {
+            self.moveTimer = 0;
+
+            var hitEdge = false;
+
+            for (&self.invaders) |*row| {
+                for (row) |*invader| {
+                    if (invader.active) {
+                        const nextX = invader.position_x + (self.speed * self.direction);
+                        if (nextX < 0 or nextX + invader.width > @as(f32, @floatFromInt(screenWidth))) {
+                            hitEdge = true;
+                            break;
+                        }
+                    }
+                }
+                if (hitEdge) {
+                    break;
+                }
+            }
+
+            if (hitEdge) {
+                self.direction *= -1.0;
+                for (&self.invaders) |*row| {
+                    for (row) |*invader| {
+                        invader.update(0, self.dropDistance);
+                    }
+                }
+            } else {
+                for (&self.invaders) |*row| {
+                    for (row) |*invader| {
+                        invader.update(self.speed * self.direction, 0);
+                    }
+                }
+            }
+        }
     }
 
     fn draw(self: *@This()) void {
@@ -256,6 +314,11 @@ const Invader = struct {
             .speed = 5.0,
             .active = true,
         };
+    }
+
+    fn update(self: *@This(), dx: f32, dy: f32) void {
+        self.position_x += dx;
+        self.position_y += dy;
     }
 
     fn draw(self: @This()) void {
