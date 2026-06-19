@@ -2,8 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const rl = @import("raylib");
 
-// Zig 0.16's default debug Io is std.Io.Threaded, which currently fails to
-// compile for wasm32-emscripten. On emscripten route std.debug through a
+// Zig 0.16's default debug Io is std.Io.Threaded, which currently fails to compile for wasm32-emscripten. On emscripten route std.debug through a
 // no-op Io and trap on panic; native keeps default behavior.
 pub const std_options_debug_io: std.Io = if (builtin.os.tag == .emscripten)
     std.Io.failing
@@ -24,6 +23,7 @@ const screenHeight: i32 = 600;
 const title = "Zig Invaders";
 
 const maxBullets: i32 = 10;
+const maxEnemyBullets: i32 = 20;
 
 const invaderRows: i32 = 5;
 const invaderCols: i32 = 11;
@@ -33,6 +33,7 @@ var game_state: GameState = undefined;
 const GameState = struct {
     player: Player,
     bullets: Bullets,
+    enemyBullets: EnemyBullets,
     invaders: Invaders,
     timer: Timer,
     score: Score,
@@ -41,6 +42,7 @@ const GameState = struct {
         return .{
             .player = Player.init(),
             .bullets = Bullets.init(),
+            .enemyBullets = EnemyBullets.init(),
             .invaders = Invaders.init(),
             .timer = Timer.init(),
             .score = Score.init(),
@@ -51,12 +53,15 @@ const GameState = struct {
         self.player.update();
         self.bullets.update(self.player);
         self.bullets.checkCollision(&self.invaders, &self.score);
+        self.enemyBullets.update();
+        self.enemyBullets.shoot(&self.invaders);
         self.invaders.update();
     }
 
     fn draw(self: *@This()) void {
         self.player.draw();
         self.bullets.draw();
+        self.enemyBullets.draw();
         self.invaders.draw();
         self.timer.draw();
         self.score.draw();
@@ -143,11 +148,8 @@ const Bullets = struct {
 
     fn init() @This() {
         var bullets: [maxBullets]Bullet = undefined;
-        const bulletWidth: f32 = 4.0;
-        const bulletHeight: f32 = 10.0;
-
         for (&bullets) |*bullet| {
-            bullet.* = Bullet.init(0, 0, bulletWidth, bulletHeight);
+            bullet.* = Bullet.init();
         }
 
         return .{ .bullets = bullets };
@@ -194,17 +196,12 @@ const Bullet = struct {
     speed: f32,
     active: bool,
 
-    pub fn init(
-        position_x: f32,
-        position_y: f32,
-        width: f32,
-        height: f32,
-    ) @This() {
+    pub fn init() @This() {
         return .{
-            .position_x = position_x,
-            .position_y = position_y,
-            .width = width,
-            .height = height,
+            .position_x = 0,
+            .position_y = 0,
+            .width = 4.0,
+            .height = 10.0,
             .speed = 10.0,
             .active = false,
         };
@@ -266,11 +263,6 @@ const Invaders = struct {
         const startY: f32 = 50.0;
         const spacingX = 60.0;
         const spacingY = 40.0;
-        const speed = 5.0;
-        const moveDelay = 30;
-        const direction = 1.0;
-        const moveTimer = 0;
-        const dropDistance = 20.0;
 
         for (&invaders, 0..) |*row, i| {
             for (row, 0..) |*invader, j| {
@@ -282,11 +274,11 @@ const Invaders = struct {
 
         return .{
             .invaders = invaders,
-            .speed = speed,
-            .moveDelay = moveDelay,
-            .direction = direction,
-            .moveTimer = moveTimer,
-            .dropDistance = dropDistance,
+            .speed = 5.0,
+            .moveDelay = 30,
+            .direction = 1.0,
+            .moveTimer = 0,
+            .dropDistance = 20.0,
         };
     }
 
@@ -360,14 +352,11 @@ const Invader = struct {
     active: bool,
 
     fn init(position_x: f32, position_y: f32) @This() {
-        const invaderWidth = 40.0;
-        const invaderHeight = 30.0;
-
         return .{
             .position_x = position_x,
             .position_y = position_y,
-            .width = invaderWidth,
-            .height = invaderHeight,
+            .width = 40.0,
+            .height = 30.0,
             .speed = 5.0,
             .active = true,
         };
@@ -386,6 +375,112 @@ const Invader = struct {
                 @intFromFloat(self.width),
                 @intFromFloat(self.height),
                 rl.Color.green,
+            );
+        }
+    }
+
+    fn getRect(self: @This()) Rectangle {
+        return .{
+            .x = self.position_x,
+            .y = self.position_y,
+            .width = self.width,
+            .height = self.height,
+        };
+    }
+};
+
+const EnemyBullets = struct {
+    enemyBullets: [maxEnemyBullets]EnemyBullet,
+    enemyShootDelay: i32,
+    enemyShootChance: i32,
+    enemyShootTimer: i32,
+
+    fn init() @This() {
+        var enemyBullets: [maxEnemyBullets]EnemyBullet = undefined;
+
+        for (&enemyBullets) |*enemyBullet| {
+            enemyBullet.* = EnemyBullet.init();
+        }
+
+        return .{
+            .enemyBullets = enemyBullets,
+            .enemyShootDelay = 60,
+            .enemyShootChance = 5,
+            .enemyShootTimer = 0,
+        };
+    }
+
+    fn update(self: *@This()) void {
+        for (&self.enemyBullets) |*bullet| {
+            bullet.update();
+        }
+    }
+
+    fn shoot(self: *@This(), invaders: *Invaders) void {
+        self.enemyShootTimer += 1;
+        if (self.enemyShootTimer >= self.enemyShootDelay) {
+            self.enemyShootTimer = 0;
+            for (&invaders.invaders) |*row| {
+                for (row) |*invader| {
+                    if (invader.active and rl.getRandomValue(0, 100) < self.enemyShootChance) {
+                        for (&self.enemyBullets) |*bullet| {
+                            if (!bullet.active) {
+                                bullet.position_x = invader.position_x + invader.width / 2 - bullet.width / 2;
+                                bullet.position_y = invader.position_y + invader.height;
+                                bullet.active = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw(self: *@This()) void {
+        for (&self.enemyBullets) |*bullet| {
+            bullet.draw();
+        }
+    }
+};
+
+const EnemyBullet = struct {
+    position_x: f32,
+    position_y: f32,
+    width: f32,
+    height: f32,
+    speed: f32,
+    active: bool,
+
+    fn init() @This() {
+        return .{
+            .position_x = 0,
+            .position_y = 0,
+            .width = 4.0,
+            .height = 10.0,
+            .speed = 5.0,
+            .active = false,
+        };
+    }
+
+    fn update(self: *@This()) void {
+        if (self.active) {
+            self.position_y += self.speed;
+            if (self.position_y > @as(f32, @floatFromInt(screenHeight))) {
+                self.active = false;
+            }
+        }
+    }
+
+    fn draw(self: @This()) void {
+        if (self.active) {
+            rl.drawRectangle(
+                @intFromFloat(self.position_x),
+                @intFromFloat(self.position_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                rl.Color.yellow,
             );
         }
     }
