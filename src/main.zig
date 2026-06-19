@@ -35,6 +35,7 @@ const GameState = struct {
     bullets: Bullets,
     invaders: Invaders,
     timer: Timer,
+    score: Score,
 
     fn init() GameState {
         return .{
@@ -42,12 +43,14 @@ const GameState = struct {
             .bullets = Bullets.init(),
             .invaders = Invaders.init(),
             .timer = Timer.init(),
+            .score = Score.init(),
         };
     }
 
     fn update(self: *@This()) void {
         self.player.update();
         self.bullets.update(self.player);
+        self.bullets.checkCollision(&self.invaders, &self.score);
         self.invaders.update();
     }
 
@@ -56,6 +59,7 @@ const GameState = struct {
         self.bullets.draw();
         self.invaders.draw();
         self.timer.draw();
+        self.score.draw();
     }
 };
 
@@ -70,6 +74,25 @@ const Rectangle = struct {
             self.x + self.width > other.x and
             self.y < other.y + other.height and
             self.y + self.height > other.y;
+    }
+};
+
+const Score = struct {
+    value: i32,
+
+    fn init() Score {
+        return .{
+            .value = 0,
+        };
+    }
+
+    fn draw(self: @This()) void {
+        const scoreText: [:0]const u8 = rl.textFormat("Score: %d", .{self.value});
+        rl.drawText(scoreText, 20, screenHeight - 20, 20, rl.Color.white);
+    }
+
+    fn increment(self: *@This()) void {
+        self.value += 10;
     }
 };
 
@@ -149,6 +172,18 @@ const Bullets = struct {
             bullet.draw();
         }
     }
+
+    fn checkCollision(
+        self: *@This(),
+        invaders: *Invaders,
+        score: *Score,
+    ) void {
+        for (&self.bullets) |*bullet| {
+            if (bullet.active and invaders.checkCollision(bullet)) {
+                score.increment();
+            }
+        }
+    }
 };
 
 const Bullet = struct {
@@ -204,6 +239,15 @@ const Bullet = struct {
                 rl.Color.red,
             );
         }
+    }
+
+    fn getRect(self: @This()) Rectangle {
+        return .{
+            .x = self.position_x,
+            .y = self.position_y,
+            .width = self.width,
+            .height = self.height,
+        };
     }
 };
 
@@ -292,6 +336,19 @@ const Invaders = struct {
             }
         }
     }
+
+    fn checkCollision(self: *@This(), bullet: *Bullet) bool {
+        for (&self.invaders) |*row| {
+            for (row) |*invader| {
+                if (invader.active and bullet.getRect().intersects(invader.getRect())) {
+                    bullet.active = false;
+                    invader.active = false;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 };
 
 const Invader = struct {
@@ -331,6 +388,15 @@ const Invader = struct {
                 rl.Color.green,
             );
         }
+    }
+
+    fn getRect(self: @This()) Rectangle {
+        return .{
+            .x = self.position_x,
+            .y = self.position_y,
+            .width = self.width,
+            .height = self.height,
+        };
     }
 };
 
