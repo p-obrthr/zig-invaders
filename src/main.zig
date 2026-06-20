@@ -103,6 +103,9 @@ const Run = struct {
                 .gameOver = GameOver.init(self.score.total, self.timer.get_time_parts()),
             };
         }
+
+        self.timer.update();
+
         return null;
     }
 
@@ -128,12 +131,15 @@ const Run = struct {
 
 const GameOver = struct {
     score: i32,
-    time: [2]u64,
+    time: [8:0]u8,
 
-    fn init(score: i32, timeParts: [2]u64) @This() {
+    fn init(score: i32, timeParts: struct { u64, u64 }) @This() {
+        var buffer: [8:0]u8 = std.mem.zeroes([8:0]u8);
+
+        writeDisplayTimeIntoBuffer(&buffer, timeParts);
         return .{
             .score = score,
-            .time = timeParts,
+            .time = buffer,
         };
     }
 
@@ -146,17 +152,14 @@ const GameOver = struct {
 
     fn draw(self: @This()) void {
         rl.drawText("GAME OVER", 270, 250, 40, rl.Color.red);
-
-        const text = rl.textFormat(
-            "Final Score: %d, Time: %02d:%02d",
+        const scoreText = rl.textFormat(
+            "Final Score: %d with time Time: %s",
             .{
                 self.score,
-                self.time[0],
-                self.time[1],
+                &self.time,
             },
         );
-
-        rl.drawText(text, 100, 310, 30, rl.Color.white);
+        rl.drawText(scoreText, 100, 310, 30, rl.Color.white);
     }
 };
 
@@ -629,10 +632,12 @@ const EnemyBullet = struct {
 
 const Timer = struct {
     start_ms: u64,
+    displayBuffer: [8:0]u8,
 
     fn init() @This() {
         return .{
             .start_ms = get_now_ms(),
+            .displayBuffer = std.mem.zeroes([8:0]u8),
         };
     }
 
@@ -644,21 +649,28 @@ const Timer = struct {
         return get_now_ms() - self.start_ms;
     }
 
-    fn get_time_parts(self: @This()) [2]u64 {
+    fn get_time_parts(self: @This()) struct { u64, u64 } {
         const total = self.get_elapsed_ms() / 1000;
         return .{ total / 60, total % 60 };
     }
 
-    fn draw(self: Timer) void {
+    fn update(self: *Timer) void {
         const time = self.get_time_parts();
-        const timeText = rl.textFormat(
-            "%02d:%02d",
-            .{ time[0], time[1] },
-        );
+        writeDisplayTimeIntoBuffer(&self.displayBuffer, time);
+    }
 
-        rl.drawText(timeText, screenWidth - 80, 20, 20, rl.Color.yellow);
+    fn draw(self: Timer) void {
+        rl.drawText(&self.displayBuffer, screenWidth - 80, 20, 20, rl.Color.yellow);
     }
 };
+
+fn writeDisplayTimeIntoBuffer(buffer: *[8:0]u8, time: struct { u64, u64 }) void {
+    _ = std.fmt.bufPrintZ(
+        buffer,
+        "{d:0>2}:{d:0>2}",
+        .{ time[0], time[1] },
+    ) catch {};
+}
 
 fn updateDrawFrame(arg: ?*anyopaque) callconv(.c) void {
     rl.beginDrawing();
