@@ -28,9 +28,45 @@ const maxEnemyBullets: i32 = 20;
 const invaderRows: i32 = 5;
 const invaderCols: i32 = 11;
 
-var game_state: GameState = undefined;
+var game: Game = undefined;
 
-const GameState = struct {
+const Game = struct {
+    view: View,
+
+    fn init() @This() {
+        return .{
+            .view = View{ .run = Run.init() },
+        };
+    }
+
+    fn cycle(self: *@This()) void {
+        self.update();
+        self.draw();
+    }
+
+    fn update(self: *@This()) void {
+        switch (self.view) {
+            inline else => |*s| {
+                if (s.update()) |new| {
+                    self.view = new;
+                }
+            },
+        }
+    }
+
+    fn draw(self: *@This()) void {
+        switch (self.view) {
+            inline else => |*s| s.draw(),
+        }
+    }
+};
+
+const View = union(enum) {
+    run: Run,
+    gameOver: GameOver,
+};
+
+const Run = struct {
     player: Player,
     bullets: Bullets,
     enemyBullets: EnemyBullets,
@@ -38,7 +74,7 @@ const GameState = struct {
     timer: Timer,
     score: Score,
 
-    fn init() GameState {
+    fn init() @This() {
         return .{
             .player = Player.init(),
             .bullets = Bullets.init(),
@@ -49,22 +85,69 @@ const GameState = struct {
         };
     }
 
-    fn update(self: *@This()) void {
+    fn update(self: *@This()) ?View {
         self.player.update();
         self.bullets.update(self.player);
         self.bullets.checkCollision(&self.invaders, &self.score);
         self.enemyBullets.update();
         self.enemyBullets.shoot(&self.invaders);
         self.invaders.update();
+        self.timer.update();
+
+        if (self.enemyBullets.checkHit(self.player)) {
+            return View{
+                .gameOver = GameOver.init(self.score.value, self.timer.get_time_parts()),
+            };
+        }
+        return null;
     }
 
-    fn draw(self: *@This()) void {
+    fn draw(self: @This()) void {
         self.player.draw();
         self.bullets.draw();
         self.enemyBullets.draw();
         self.invaders.draw();
         self.timer.draw();
         self.score.draw();
+    }
+
+    fn view(self: *@This()) void {
+        self.View.update();
+        self.View.draw();
+    }
+};
+
+const GameOver = struct {
+    score: i32,
+    time: [8:0]u8,
+
+    fn init(score: i32, timeParts: struct { u64, u64 }) @This() {
+        var buffer: [8:0]u8 = std.mem.zeroes([8:0]u8);
+
+        writeDisplayTimeIntoBuffer(&buffer, timeParts);
+        return .{
+            .score = score,
+            .time = buffer,
+        };
+    }
+
+    fn update(_: @This()) ?View {
+        if (rl.isKeyPressed(.enter)) {
+            return View{ .run = Run.init() };
+        }
+        return null;
+    }
+
+    fn draw(self: @This()) void {
+        rl.drawText("GAME OVER", 270, 250, 40, rl.Color.red);
+        const scoreText = rl.textFormat(
+            "Final Score: %d with time Time: %s",
+            .{
+                self.score,
+                &self.time,
+            },
+        );
+        rl.drawText(scoreText, 100, 310, 30, rl.Color.white);
     }
 };
 
@@ -86,9 +169,7 @@ const Score = struct {
     value: i32,
 
     fn init() Score {
-        return .{
-            .value = 0,
-        };
+        return .{ .value = 0 };
     }
 
     fn draw(self: @This()) void {
@@ -111,12 +192,10 @@ const Player = struct {
     fn init() @This() {
         const playerWidth: f32 = 50;
         const playerHeight: f32 = 30;
-        const x = @as(f32, @floatFromInt(screenWidth)) / 2 - playerWidth / 2;
-        const y = @as(f32, @floatFromInt(screenHeight)) - 60;
 
         return .{
-            .position_x = x,
-            .position_y = y,
+            .position_x = @as(f32, @floatFromInt(screenWidth)) / 2 - playerWidth / 2,
+            .position_y = @as(f32, @floatFromInt(screenHeight)) - 60,
             .width = playerWidth,
             .height = playerHeight,
             .speed = 5.0,
@@ -140,6 +219,15 @@ const Player = struct {
             @intFromFloat(self.height),
             rl.Color.blue,
         );
+    }
+
+    fn getRect(self: @This()) Rectangle {
+        return .{
+            .x = self.position_x,
+            .y = self.position_y,
+            .width = self.width,
+            .height = self.height,
+        };
     }
 };
 
@@ -169,8 +257,8 @@ const Bullets = struct {
         }
     }
 
-    fn draw(self: *@This()) void {
-        for (&self.bullets) |*bullet| {
+    fn draw(self: @This()) void {
+        for (self.bullets) |bullet| {
             bullet.draw();
         }
     }
@@ -321,9 +409,9 @@ const Invaders = struct {
         }
     }
 
-    fn draw(self: *@This()) void {
-        for (&self.invaders) |*row| {
-            for (row) |*invader| {
+    fn draw(self: @This()) void {
+        for (self.invaders) |row| {
+            for (row) |invader| {
                 invader.draw();
             }
         }
@@ -416,6 +504,18 @@ const EnemyBullets = struct {
         }
     }
 
+    fn checkHit(self: *@This(), player: Player) bool {
+        for (&self.enemyBullets) |*bullet| {
+            if (bullet.active) {
+                if (bullet.getRect().intersects(player.getRect())) {
+                    bullet.active = false;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     fn shoot(self: *@This(), invaders: *Invaders) void {
         self.enemyShootTimer += 1;
         if (self.enemyShootTimer >= self.enemyShootDelay) {
@@ -438,8 +538,8 @@ const EnemyBullets = struct {
         }
     }
 
-    fn draw(self: *@This()) void {
-        for (&self.enemyBullets) |*bullet| {
+    fn draw(self: @This()) void {
+        for (self.enemyBullets) |bullet| {
             bullet.draw();
         }
     }
@@ -497,10 +597,12 @@ const EnemyBullet = struct {
 
 const Timer = struct {
     start_ms: u64,
+    displayBuffer: [8:0]u8,
 
     fn init() @This() {
         return .{
             .start_ms = get_now_ms(),
+            .displayBuffer = std.mem.zeroes([8:0]u8),
         };
     }
 
@@ -517,32 +619,30 @@ const Timer = struct {
         return .{ total / 60, total % 60 };
     }
 
-    fn draw(self: *Timer) void {
+    fn update(self: *Timer) void {
         const time = self.get_time_parts();
+        writeDisplayTimeIntoBuffer(&self.displayBuffer, time);
+    }
 
-        var buffer: [6]u8 = undefined;
-
-        const text = std.fmt.bufPrintZ(
-            &buffer,
-            "{d:0>2}:{d:0>2}",
-            .{ time[0], time[1] },
-        ) catch "00:00";
-
-        rl.drawText(text, screenWidth - 80, 20, 20, rl.Color.yellow);
+    fn draw(self: Timer) void {
+        rl.drawText(&self.displayBuffer, screenWidth - 80, 20, 20, rl.Color.yellow);
     }
 };
 
+fn writeDisplayTimeIntoBuffer(buffer: *[8:0]u8, time: struct { u64, u64 }) void {
+    _ = std.fmt.bufPrintZ(
+        buffer,
+        "{d:0>2}:{d:0>2}",
+        .{ time[0], time[1] },
+    ) catch {};
+}
+
 fn updateDrawFrame(arg: ?*anyopaque) callconv(.c) void {
-    const game = @as(*GameState, @ptrCast(@alignCast(arg.?)));
-
-    game.update();
-
     rl.beginDrawing();
     defer rl.endDrawing();
-
     rl.clearBackground(rl.Color.black);
 
-    game.draw();
+    @as(*Game, @ptrCast(@alignCast(arg.?))).cycle();
 }
 
 pub fn main() !void {
@@ -551,13 +651,13 @@ pub fn main() !void {
 
     rl.setTargetFPS(60);
 
-    game_state = GameState.init();
+    game = Game.init();
 
     if (builtin.os.tag == .emscripten) {
-        emscripten_set_main_loop_arg(updateDrawFrame, &game_state, 0, 1);
+        emscripten_set_main_loop_arg(updateDrawFrame, &game, 0, 1);
     } else {
         while (!rl.windowShouldClose()) {
-            updateDrawFrame(&game_state);
+            updateDrawFrame(&game);
         }
     }
 }
