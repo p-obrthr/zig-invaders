@@ -88,15 +88,19 @@ const Run = struct {
     fn update(self: *@This()) ?View {
         self.player.update();
         self.bullets.update(self.player);
-        self.bullets.checkCollision(&self.invaders, &self.score);
-        self.enemyBullets.update();
-        self.enemyBullets.shoot(&self.invaders);
-        self.invaders.update();
-        self.timer.update();
 
-        if (self.enemyBullets.checkHit(self.player)) {
+        const hitCount = self.bullets.checkCollision(&self.invaders);
+        if (hitCount > 0) {
+            self.score.incrementByCount(hitCount);
+        }
+
+        self.enemyBullets.update();
+        self.enemyBullets.shoot(self.invaders);
+        self.invaders.update();
+
+        if (self.enemyBullets.checkHit(self.player) and self.player.getHittedAndReturnIsDead()) {
             return View{
-                .gameOver = GameOver.init(self.score.value, self.timer.get_time_parts()),
+                .gameOver = GameOver.init(self.score.total, self.timer.get_time_parts()),
             };
         }
         return null;
@@ -108,7 +112,12 @@ const Run = struct {
         self.enemyBullets.draw();
         self.invaders.draw();
         self.timer.draw();
-        self.score.draw();
+        self.drawStatus();
+    }
+
+    fn drawStatus(self: @This()) void {
+        const scoreText: [:0]const u8 = rl.textFormat("Score: %d, Lives: %d", .{ self.score.total, self.player.lives });
+        rl.drawText(scoreText, 20, screenHeight - 20, 20, rl.Color.white);
     }
 
     fn view(self: *@This()) void {
@@ -119,15 +128,12 @@ const Run = struct {
 
 const GameOver = struct {
     score: i32,
-    time: [8:0]u8,
+    time: [2]u64,
 
-    fn init(score: i32, timeParts: struct { u64, u64 }) @This() {
-        var buffer: [8:0]u8 = std.mem.zeroes([8:0]u8);
-
-        writeDisplayTimeIntoBuffer(&buffer, timeParts);
+    fn init(score: i32, timeParts: [2]u64) @This() {
         return .{
             .score = score,
-            .time = buffer,
+            .time = timeParts,
         };
     }
 
@@ -140,14 +146,17 @@ const GameOver = struct {
 
     fn draw(self: @This()) void {
         rl.drawText("GAME OVER", 270, 250, 40, rl.Color.red);
-        const scoreText = rl.textFormat(
-            "Final Score: %d with time Time: %s",
+
+        const text = rl.textFormat(
+            "Final Score: %d, Time: %02d:%02d",
             .{
                 self.score,
-                &self.time,
+                self.time[0],
+                self.time[1],
             },
         );
-        rl.drawText(scoreText, 100, 310, 30, rl.Color.white);
+
+        rl.drawText(text, 100, 310, 30, rl.Color.white);
     }
 };
 
@@ -166,19 +175,18 @@ const Rectangle = struct {
 };
 
 const Score = struct {
+    total: i32,
     value: i32,
 
     fn init() Score {
-        return .{ .value = 0 };
+        return .{
+            .total = 0,
+            .value = 10,
+        };
     }
 
-    fn draw(self: @This()) void {
-        const scoreText: [:0]const u8 = rl.textFormat("Score: %d", .{self.value});
-        rl.drawText(scoreText, 20, screenHeight - 20, 20, rl.Color.white);
-    }
-
-    fn increment(self: *@This()) void {
-        self.value += 10;
+    fn incrementByCount(self: *@This(), count: i32) void {
+        self.total += self.value * count;
     }
 };
 
@@ -188,6 +196,7 @@ const Player = struct {
     width: f32,
     height: f32,
     speed: f32,
+    lives: i32,
 
     fn init() @This() {
         const playerWidth: f32 = 50;
@@ -199,6 +208,7 @@ const Player = struct {
             .width = playerWidth,
             .height = playerHeight,
             .speed = 5.0,
+            .lives = 3,
         };
     }
 
@@ -209,6 +219,25 @@ const Player = struct {
         if (rl.isKeyDown(.left) and self.position_x > 0) {
             self.position_x -= self.speed;
         }
+    }
+
+    fn getHittedAndReturnIsDead(self: *@This()) bool {
+        self.decrementLive();
+        self.reduceSize();
+
+        if (self.lives == 0) {
+            return true;
+        }
+        return false;
+    }
+
+    fn reduceSize(self: *@This()) void {
+        self.width = self.width * 0.66;
+        self.height = self.height * 0.66;
+    }
+
+    fn decrementLive(self: *@This()) void {
+        self.lives -= 1;
     }
 
     fn draw(self: @This()) void {
@@ -266,13 +295,16 @@ const Bullets = struct {
     fn checkCollision(
         self: *@This(),
         invaders: *Invaders,
-        score: *Score,
-    ) void {
+    ) i32 {
+        var count: i32 = 0;
+
         for (&self.bullets) |*bullet| {
             if (bullet.active and invaders.checkCollision(bullet)) {
-                score.increment();
+                count += 1;
             }
         }
+
+        return count;
     }
 };
 
@@ -516,12 +548,12 @@ const EnemyBullets = struct {
         return false;
     }
 
-    fn shoot(self: *@This(), invaders: *Invaders) void {
+    fn shoot(self: *@This(), invaders: Invaders) void {
         self.enemyShootTimer += 1;
         if (self.enemyShootTimer >= self.enemyShootDelay) {
             self.enemyShootTimer = 0;
-            for (&invaders.invaders) |*row| {
-                for (row) |*invader| {
+            for (invaders.invaders) |row| {
+                for (row) |invader| {
                     if (invader.active and rl.getRandomValue(0, 100) < self.enemyShootChance) {
                         for (&self.enemyBullets) |*bullet| {
                             if (!bullet.active) {
@@ -597,12 +629,10 @@ const EnemyBullet = struct {
 
 const Timer = struct {
     start_ms: u64,
-    displayBuffer: [8:0]u8,
 
     fn init() @This() {
         return .{
             .start_ms = get_now_ms(),
-            .displayBuffer = std.mem.zeroes([8:0]u8),
         };
     }
 
@@ -614,28 +644,21 @@ const Timer = struct {
         return get_now_ms() - self.start_ms;
     }
 
-    fn get_time_parts(self: @This()) struct { u64, u64 } {
+    fn get_time_parts(self: @This()) [2]u64 {
         const total = self.get_elapsed_ms() / 1000;
         return .{ total / 60, total % 60 };
     }
 
-    fn update(self: *Timer) void {
-        const time = self.get_time_parts();
-        writeDisplayTimeIntoBuffer(&self.displayBuffer, time);
-    }
-
     fn draw(self: Timer) void {
-        rl.drawText(&self.displayBuffer, screenWidth - 80, 20, 20, rl.Color.yellow);
+        const time = self.get_time_parts();
+        const timeText = rl.textFormat(
+            "%02d:%02d",
+            .{ time[0], time[1] },
+        );
+
+        rl.drawText(timeText, screenWidth - 80, 20, 20, rl.Color.yellow);
     }
 };
-
-fn writeDisplayTimeIntoBuffer(buffer: *[8:0]u8, time: struct { u64, u64 }) void {
-    _ = std.fmt.bufPrintZ(
-        buffer,
-        "{d:0>2}:{d:0>2}",
-        .{ time[0], time[1] },
-    ) catch {};
-}
 
 fn updateDrawFrame(arg: ?*anyopaque) callconv(.c) void {
     rl.beginDrawing();
