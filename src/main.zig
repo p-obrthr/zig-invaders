@@ -24,6 +24,7 @@ const title = "Zig Invaders";
 
 const maxBullets: i32 = 10;
 const maxEnemyBullets: i32 = 20;
+const maxBorders: i32 = 3;
 
 const invaderRows: i32 = 5;
 const invaderCols: i32 = 11;
@@ -71,6 +72,7 @@ const Run = struct {
     bullets: Bullets,
     enemyBullets: EnemyBullets,
     invaders: Invaders,
+    borders: Borders,
     timer: Timer,
     score: Score,
 
@@ -80,6 +82,7 @@ const Run = struct {
             .bullets = Bullets.init(),
             .enemyBullets = EnemyBullets.init(),
             .invaders = Invaders.init(),
+            .borders = Borders.init(),
             .timer = Timer.init(),
             .score = Score.init(),
         };
@@ -89,18 +92,21 @@ const Run = struct {
         self.player.update();
         self.bullets.update(self.player);
 
-        const hitCount = self.bullets.checkCollision(&self.invaders);
-        if (hitCount > 0) {
-            self.score.incrementByCount(hitCount);
-        }
-
         self.enemyBullets.update();
         self.enemyBullets.shoot(self.invaders);
         self.invaders.update();
 
-        if (self.enemyBullets.checkHit(self.player) and self.player.getHittedAndReturnIsDead()) {
+        const hitBullet = self.bullets.checkBorderAndHit(&self.invaders, self.borders);
+
+        if (hitBullet > 0) {
+            self.score.incrementByCount(hitBullet);
+        }
+
+        const hitEnemyBullet = self.enemyBullets.checkBorderAndHit(self.player, self.borders);
+
+        if (hitEnemyBullet > 0 and self.player.getHittedAndReturnIsDead()) {
             return View{
-                .gameOver = GameOver.init(self.score.total, self.timer.get_time_parts()),
+                .gameOver = GameOver.init(self.score.total, self.timer.getTimeParts()),
             };
         }
 
@@ -114,6 +120,7 @@ const Run = struct {
         self.bullets.draw();
         self.enemyBullets.draw();
         self.invaders.draw();
+        self.borders.draw();
         self.timer.draw();
         self.drawStatus();
     }
@@ -174,6 +181,15 @@ const Rectangle = struct {
             self.x + self.width > other.x and
             self.y < other.y + other.height and
             self.y + self.height > other.y;
+    }
+
+    fn intersectsAny(self: Rectangle, others: []const Rectangle) bool {
+        for (others) |other| {
+            if (self.intersects(other)) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -295,19 +311,34 @@ const Bullets = struct {
         }
     }
 
-    fn checkCollision(
-        self: *@This(),
-        invaders: *Invaders,
-    ) i32 {
-        var count: i32 = 0;
+    fn checkBorderAndHit(self: *@This(), invaders: *Invaders, borders: Borders) i32 {
+        var hit: i32 = 0;
 
         for (&self.bullets) |*bullet| {
-            if (bullet.active and invaders.checkCollision(bullet)) {
-                count += 1;
+            if (!bullet.active) {
+                continue;
+            }
+
+            const bulletRect = bullet.getRect();
+
+            if (bulletRect.intersectsAny(&borders.getRects())) {
+                bullet.active = false;
+                continue;
+            }
+
+            for (&invaders.invaders) |*row| {
+                for (row) |*invader| {
+                    if (invader.active and bulletRect.intersects(invader.getRect())) {
+                        invader.active = false;
+                        bullet.active = false;
+                        hit += 1;
+                        break;
+                    }
+                }
             }
         }
 
-        return count;
+        return hit;
     }
 };
 
@@ -451,19 +482,6 @@ const Invaders = struct {
             }
         }
     }
-
-    fn checkCollision(self: *@This(), bullet: *Bullet) bool {
-        for (&self.invaders) |*row| {
-            for (row) |*invader| {
-                if (invader.active and bullet.getRect().intersects(invader.getRect())) {
-                    bullet.active = false;
-                    invader.active = false;
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
 };
 
 const Invader = struct {
@@ -539,16 +557,26 @@ const EnemyBullets = struct {
         }
     }
 
-    fn checkHit(self: *@This(), player: Player) bool {
+    fn checkBorderAndHit(self: *@This(), player: Player, borders: Borders) i32 {
+        var hit: i32 = 0;
+
         for (&self.enemyBullets) |*bullet| {
             if (bullet.active) {
-                if (bullet.getRect().intersects(player.getRect())) {
+                var bulletRect = bullet.getRect();
+
+                if (bulletRect.intersects(player.getRect())) {
+                    hit = hit + 1;
                     bullet.active = false;
-                    return true;
+                    continue;
+                }
+
+                if (bulletRect.intersectsAny(&borders.getRects())) {
+                    bullet.active = false;
                 }
             }
         }
-        return false;
+
+        return hit;
     }
 
     fn shoot(self: *@This(), invaders: Invaders) void {
@@ -630,32 +658,104 @@ const EnemyBullet = struct {
     }
 };
 
+const Borders = struct {
+    borders: [maxBorders]Border,
+
+    fn init() @This() {
+        var borders: [maxBorders]Border = undefined;
+
+        const borderHeight: f32 = 30;
+        const covered: f32 = 0.25 * @as(f32, @floatFromInt(screenWidth));
+        const borderWidth: f32 = covered / maxBorders;
+        const space: f32 = (@as(f32, @floatFromInt(screenWidth)) - covered);
+        const spaceWidth: f32 = space / (maxBorders + 1);
+
+        for (&borders, 0..) |*border, i| {
+            const x: f32 = @as(f32, @floatFromInt(i)) * borderWidth + (@as(f32, @floatFromInt(i)) + 1) * spaceWidth;
+            border.* = Border.init(x, 450, borderWidth, borderHeight);
+        }
+
+        return .{ .borders = borders };
+    }
+
+    fn draw(self: @This()) void {
+        for (self.borders) |border| {
+            border.draw();
+        }
+    }
+
+    fn getRects(self: @This()) [maxBorders]Rectangle {
+        var rects: [maxBorders]Rectangle = undefined;
+
+        for (self.borders, 0..) |border, i| {
+            rects[i] = border.getRect();
+        }
+
+        return rects;
+    }
+};
+
+const Border = struct {
+    position_x: f32,
+    position_y: f32,
+    width: f32,
+    height: f32,
+
+    pub fn init(x: f32, y: f32, w: f32, h: f32) @This() {
+        return .{
+            .position_x = x,
+            .position_y = y,
+            .width = w,
+            .height = h,
+        };
+    }
+
+    fn draw(self: @This()) void {
+        rl.drawRectangle(
+            @intFromFloat(self.position_x),
+            @intFromFloat(self.position_y),
+            @intFromFloat(self.width),
+            @intFromFloat(self.height),
+            rl.Color.brown,
+        );
+    }
+
+    fn getRect(self: @This()) Rectangle {
+        return .{
+            .x = self.position_x,
+            .y = self.position_y,
+            .width = self.width,
+            .height = self.height,
+        };
+    }
+};
+
 const Timer = struct {
     start_ms: u64,
     displayBuffer: [8:0]u8,
 
     fn init() @This() {
         return .{
-            .start_ms = get_now_ms(),
+            .start_ms = getNowMs(),
             .displayBuffer = std.mem.zeroes([8:0]u8),
         };
     }
 
-    fn get_now_ms() u64 {
+    fn getNowMs() u64 {
         return @intFromFloat(rl.getTime() * 1000.0);
     }
 
-    fn get_elapsed_ms(self: @This()) u64 {
-        return get_now_ms() - self.start_ms;
+    fn getElapsedMs(self: @This()) u64 {
+        return getNowMs() - self.start_ms;
     }
 
-    fn get_time_parts(self: @This()) struct { u64, u64 } {
-        const total = self.get_elapsed_ms() / 1000;
+    fn getTimeParts(self: @This()) struct { u64, u64 } {
+        const total = self.getElapsedMs() / 1000;
         return .{ total / 60, total % 60 };
     }
 
     fn update(self: *Timer) void {
-        const time = self.get_time_parts();
+        const time = self.getTimeParts();
         writeDisplayTimeIntoBuffer(&self.displayBuffer, time);
     }
 
