@@ -32,23 +32,27 @@ const invaderCols: i32 = 11;
 var game: Game = undefined;
 
 const Game = struct {
+    allocator: std.mem.Allocator,
     view: View,
 
-    fn init() @This() {
+    fn init(allocator: std.mem.Allocator) !@This() {
         return .{
-            .view = View{ .run = Run.init() },
+            .allocator = allocator,
+            .view = View{
+                .run = try Run.init(allocator, 1),
+            },
         };
     }
 
-    fn cycle(self: *@This()) void {
-        self.update();
+    fn cycle(self: *@This()) !void {
+        try self.update();
         self.draw();
     }
 
-    fn update(self: *@This()) void {
+    fn update(self: *@This()) !void {
         switch (self.view) {
             inline else => |*s| {
-                if (s.update()) |new| {
+                if (try s.update(self.allocator)) |new| {
                     self.view = new;
                 }
             },
@@ -65,9 +69,11 @@ const Game = struct {
 const View = union(enum) {
     run: Run,
     gameOver: GameOver,
+    levelUp: LevelUp,
 };
 
 const Run = struct {
+    level: u8,
     player: Player,
     bullets: Bullets,
     enemyBullets: EnemyBullets,
@@ -76,19 +82,24 @@ const Run = struct {
     timer: Timer,
     score: Score,
 
-    fn init() @This() {
+    fn init(allocator: std.mem.Allocator, level: u8) !@This() {
         return .{
+            .level = level,
             .player = Player.init(),
             .bullets = Bullets.init(),
             .enemyBullets = EnemyBullets.init(),
-            .invaders = Invaders.init(),
+            .invaders = try Invaders.init(allocator, level),
             .borders = Borders.init(),
             .timer = Timer.init(),
             .score = Score.init(),
         };
     }
 
-    fn update(self: *@This()) ?View {
+    fn deinit(self: *@This()) void {
+        self.invaders.deinit();
+    }
+
+    fn update(self: *@This(), _: std.mem.Allocator) !?View {
         self.player.update();
         self.bullets.update(self.player);
 
@@ -105,8 +116,22 @@ const Run = struct {
         const hitEnemyBullet = self.enemyBullets.checkBorderAndHit(self.player, self.borders);
 
         if (hitEnemyBullet > 0 and self.player.getHittedAndReturnIsDead()) {
+            self.deinit();
+
             return View{
                 .gameOver = GameOver.init(self.score.total, self.timer.getTimeParts()),
+            };
+        }
+
+        if (self.invaders.areAllDead()) {
+            self.deinit();
+
+            return View{
+                .levelUp = LevelUp.init(
+                    self.score.total,
+                    self.timer.getTimeParts(),
+                    self.level + 1,
+                ),
             };
         }
 
@@ -126,13 +151,54 @@ const Run = struct {
     }
 
     fn drawStatus(self: @This()) void {
-        const scoreText: [:0]const u8 = rl.textFormat("Score: %d, Lives: %d", .{ self.score.total, self.player.lives });
+        const scoreText: [:0]const u8 = rl.textFormat("Level: %d, Score: %d, Lives: %d", .{
+            self.level,
+            self.score.total,
+            self.player.lives,
+        });
         rl.drawText(scoreText, 20, screenHeight - 20, 20, rl.Color.white);
     }
 
     fn view(self: *@This()) void {
         self.View.update();
         self.View.draw();
+    }
+};
+
+const LevelUp = struct {
+    score: i32,
+    time: [8:0]u8,
+    nextLevel: u8,
+
+    fn init(score: i32, timeParts: struct { u64, u64 }, nextLevel: u8) @This() {
+        var buffer: [8:0]u8 = std.mem.zeroes([8:0]u8);
+
+        writeDisplayTimeIntoBuffer(&buffer, timeParts);
+        return .{
+            .nextLevel = nextLevel,
+            .score = score,
+            .time = buffer,
+        };
+    }
+
+    fn update(self: @This(), allocator: std.mem.Allocator) !?View {
+        if (rl.isKeyPressed(.enter)) {
+            return View{ .run = try Run.init(allocator, self.nextLevel) };
+        }
+        return null;
+    }
+
+    fn draw(self: @This()) void {
+        rl.drawText("Congratulations", 270, 250, 40, rl.Color.green);
+        const scoreText = rl.textFormat(
+            "You completed level %d with score of: %d and time: %s",
+            .{
+                self.nextLevel - 1,
+                self.score,
+                &self.time,
+            },
+        );
+        rl.drawText(scoreText, 100, 310, 30, rl.Color.white);
     }
 };
 
@@ -150,9 +216,9 @@ const GameOver = struct {
         };
     }
 
-    fn update(_: @This()) ?View {
+    fn update(_: @This(), allocator: std.mem.Allocator) !?View {
         if (rl.isKeyPressed(.enter)) {
-            return View{ .run = Run.init() };
+            return View{ .run = try Run.init(allocator, 1) };
         }
         return null;
     }
@@ -326,7 +392,7 @@ const Bullets = struct {
                 continue;
             }
 
-            for (&invaders.invaders) |*row| {
+            for (invaders.invaders) |row| {
                 for (row) |*invader| {
                     if (invader.active and bulletRect.intersects(invader.getRect())) {
                         invader.active = false;
@@ -403,30 +469,75 @@ const Bullet = struct {
 };
 
 const Invaders = struct {
-    invaders: [invaderRows][invaderCols]Invader,
+    allocator: std.mem.Allocator,
+    invaders: [][]Invader,
     speed: f32,
     moveDelay: i32,
     direction: f32,
     moveTimer: i32,
     dropDistance: f32,
 
-    fn init() @This() {
-        var invaders: [invaderRows][invaderCols]Invader = undefined;
+    fn init(allocator: std.mem.Allocator, level: u8) !@This() {
+        const lvl: usize = level - 1;
+
+        const invadersRowsLevel: usize = 5 + lvl;
+        const invadersColsLevel: usize = 11 + lvl;
+
+        var invaders = try allocator.alloc([]Invader, invadersRowsLevel);
+        errdefer allocator.free(invaders);
+
+        var allocatedRows: usize = 0;
+        errdefer {
+            for (0..allocatedRows) |i| {
+                allocator.free(invaders[i]);
+            }
+        }
+
+        while (allocatedRows < invadersRowsLevel) : (allocatedRows += 1) {
+            invaders[allocatedRows] = try allocator.alloc(Invader, invadersColsLevel);
+        }
+
+        const invadersWidth: f32 = 640.0;
+        const invadersHeight: f32 = 190.0;
+
+        const spaceX: f32 = 20.0;
+        const spaceY: f32 = 10.0;
+
+        const totalSpaceX = spaceX * @as(f32, @floatFromInt(invadersColsLevel - 1));
+        const totalSpaceY = spaceY * @as(f32, @floatFromInt(invadersRowsLevel - 1));
+
+        const invaderWidth =
+            (invadersWidth - totalSpaceX) / @as(f32, @floatFromInt(invadersColsLevel));
+
+        const invaderHeight =
+            (invadersHeight - totalSpaceY) / @as(f32, @floatFromInt(invadersRowsLevel));
 
         const startX: f32 = 100.0;
         const startY: f32 = 50.0;
-        const spacingX = 60.0;
-        const spacingY = 40.0;
 
-        for (&invaders, 0..) |*row, i| {
-            for (row, 0..) |*invader, j| {
-                const x: f32 = startX + @as(f32, @floatFromInt(j)) * spacingX;
-                const y: f32 = startY + @as(f32, @floatFromInt(i)) * spacingY;
-                invader.* = Invader.init(x, y);
+        for (0..invadersRowsLevel) |i| {
+            for (0..invadersColsLevel) |j| {
+                const x =
+                    startX +
+                    @as(f32, @floatFromInt(j)) *
+                        (spaceX + invaderWidth);
+
+                const y =
+                    startY +
+                    @as(f32, @floatFromInt(i)) *
+                        (spaceY + invaderHeight);
+
+                invaders[i][j] = Invader.init(
+                    x,
+                    y,
+                    invaderWidth,
+                    invaderHeight,
+                );
             }
         }
 
         return .{
+            .allocator = allocator,
             .invaders = invaders,
             .speed = 5.0,
             .moveDelay = 30,
@@ -436,6 +547,14 @@ const Invaders = struct {
         };
     }
 
+    fn deinit(self: *@This()) void {
+        for (self.invaders) |row| {
+            self.allocator.free(row);
+        }
+
+        self.allocator.free(self.invaders);
+    }
+
     fn update(self: *@This()) void {
         self.moveTimer += 1;
         if (self.moveTimer >= self.moveDelay) {
@@ -443,8 +562,8 @@ const Invaders = struct {
 
             var hitEdge = false;
 
-            for (&self.invaders) |*row| {
-                for (row) |*invader| {
+            for (self.invaders) |row| {
+                for (row) |invader| {
                     if (invader.active) {
                         const nextX = invader.position_x + (self.speed * self.direction);
                         if (nextX < 0 or nextX + invader.width > @as(f32, @floatFromInt(screenWidth))) {
@@ -460,13 +579,13 @@ const Invaders = struct {
 
             if (hitEdge) {
                 self.direction *= -1.0;
-                for (&self.invaders) |*row| {
+                for (self.invaders) |row| {
                     for (row) |*invader| {
                         invader.update(0, self.dropDistance);
                     }
                 }
             } else {
-                for (&self.invaders) |*row| {
+                for (self.invaders) |row| {
                     for (row) |*invader| {
                         invader.update(self.speed * self.direction, 0);
                     }
@@ -482,6 +601,18 @@ const Invaders = struct {
             }
         }
     }
+
+    fn areAllDead(self: @This()) bool {
+        for (self.invaders) |row| {
+            for (row) |invader| {
+                if (invader.active) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
 };
 
 const Invader = struct {
@@ -492,12 +623,17 @@ const Invader = struct {
     speed: f32,
     active: bool,
 
-    fn init(position_x: f32, position_y: f32) @This() {
+    fn init(
+        position_x: f32,
+        position_y: f32,
+        width: f32,
+        height: f32,
+    ) @This() {
         return .{
             .position_x = position_x,
             .position_y = position_y,
-            .width = 40.0,
-            .height = 30.0,
+            .width = width,
+            .height = height,
             .speed = 5.0,
             .active = true,
         };
@@ -777,7 +913,11 @@ fn updateDrawFrame(arg: ?*anyopaque) callconv(.c) void {
     defer rl.endDrawing();
     rl.clearBackground(rl.Color.black);
 
-    @as(*Game, @ptrCast(@alignCast(arg.?))).cycle();
+    const game_ptr: *Game = @ptrCast(@alignCast(arg.?));
+
+    game_ptr.cycle() catch |err| {
+        std.debug.print("Game error: {}\n", .{err});
+    };
 }
 
 pub fn main() !void {
@@ -786,7 +926,12 @@ pub fn main() !void {
 
     rl.setTargetFPS(60);
 
-    game = Game.init();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    game = try Game.init(allocator);
 
     if (builtin.os.tag == .emscripten) {
         emscripten_set_main_loop_arg(updateDrawFrame, &game, 0, 1);
