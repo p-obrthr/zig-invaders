@@ -26,8 +26,8 @@ const maxBullets: i32 = 10;
 const maxEnemyBullets: i32 = 20;
 const maxBorders: i32 = 3;
 
-const invaderRows: i32 = 5;
-const invaderCols: i32 = 11;
+const invaderStartRows: usize = 5;
+const invaderStartCols: usize = 11;
 
 var game: Game = undefined;
 
@@ -478,10 +478,8 @@ const Invaders = struct {
     dropDistance: f32,
 
     fn init(allocator: std.mem.Allocator, level: u8) !@This() {
-        const lvl: usize = level - 1;
-
-        const invadersRowsLevel: usize = 5 + lvl;
-        const invadersColsLevel: usize = 11 + lvl;
+        const invadersRowsLevel: usize = invaderStartRows + @as(usize, level) - 1;
+        const invadersColsLevel: usize = invaderStartCols + @as(usize, level) - 1;
 
         var invaders = try allocator.alloc([]Invader, invadersRowsLevel);
         errdefer allocator.free(invaders);
@@ -926,7 +924,7 @@ pub fn main() !void {
 
     rl.setTargetFPS(60);
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
 
     const allocator = arena.allocator();
