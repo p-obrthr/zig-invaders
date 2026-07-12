@@ -1,6 +1,6 @@
 # Zig Invaders
 
-Classic **Space Invaders** in **Zig** (0.16.0) with native desktop and web **(WASM)** (via emscripten) support.
+Classic **Space Invaders** in **Zig** (0.16.0) with **Raylib** for native desktop and web **(WASM)** (via emscripten) support.
 
 The WASM version is automatically built and deployed to GitHub Pages.
 
